@@ -67,11 +67,6 @@ func processArgs() ([]string, map[string]string) {
 
 func main() {
 	flag.Parse()
-	if flag.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "Need a template file to process.")
-		fmt.Fprintln(os.Stderr, usage())
-		os.Exit(1)
-	}
 	templateFiles, vals := processArgs()
 
 	out := os.Stdout
@@ -85,6 +80,7 @@ func main() {
 		defer f.Close()
 		out = f
 	}
+
 	var tpls []bastet.Template
 	if len(templateFiles) == 0 {
 		// we expect our template to come in from stdin.
@@ -101,6 +97,7 @@ func main() {
 			tpls = append(tpls, bastet.Template{Name: "file:" + fname, Reader: fh})
 		}
 	}
+
 	if err := bastet.Process(out, tpls, vals); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(3)
