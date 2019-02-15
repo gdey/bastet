@@ -1,90 +1,85 @@
-package main
+// baste provides a quick way to apply a set of values to a set of templates, and
+// concate the output it to an io.Writer
+package bastet
 
 import (
-	"flag"
+	"errors"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"os"
-	"strings"
 	"text/template"
 )
 
-/*
-Usage:
-   bastet template.tpl name=value name=value name=value
-   bastet -o stuff template.tpl  name=value name=value name=value
-*/
-
-var outputFilename string
-
-func init() {
-	flag.StringVar(&outputFilename, "output", "", "File to output to, stdout is default")
-	flag.StringVar(&outputFilename, "o", "", "File to output to, stdout is default")
+// ProcessingErr captures an error with processing
+// the named template.
+type ProcessingErr struct {
+	Name string
+	Err  error
 }
 
-func usage() string {
-	return fmt.Sprintf(`
-Usage:
-	%v [-o output.txt] template.tpl [name=value ...]
-`,
-		os.Args[0],
-	)
-
+// Error fulfills the Error interface
+func (tpe *ProcessingErr) Error() string {
+	if tpe == nil {
+		return ""
+	}
+	return fmt.Sprintf("error processing template %s : %v", tpe.Name, tpe.Err)
 }
 
-func processArgs() (string, map[string]string) {
-	vals := make(map[string]string)
-	args := flag.Args()
-	if len(args) == 1 {
-		return args[0], vals
-	}
-	for _, a := range args[1:] {
-		a := strings.TrimSpace(a)
-		if a == "" {
-			continue
-		}
-		parts := strings.SplitN(a, "=", 2)
-		if len(parts) == 1 {
-			key := strings.Replace(a, " ", "_", -1)
-			vals[key] = ""
-			continue
-		}
-		key := strings.Replace(parts[0], " ", "_", -1)
-		vals[key] = parts[1]
-	}
-	return args[0], vals
-}
-
-func main() {
-	flag.Parse()
-	if flag.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "Need a template file to process.")
-		fmt.Fprintln(os.Stderr, usage())
-		os.Exit(1)
-	}
-	templatefn, vals := processArgs()
-	t, err := template.ParseFiles(templatefn)
+// outputTemplate will process the reader as a template apply the values to it
+// and write the result to the w writer.
+// This function does not close the writer or the reader
+func outputTemplate(w io.Writer, bt Template, values map[string]string) error {
+	t, err := bt.Template()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing template file %v.\n", templatefn)
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+		return err
 	}
+	return t.Execute(w, values)
+}
 
-	out := os.Stdout
-	if outputFilename != "" {
-		f, err := os.Create(outputFilename)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error opening file %v for writing.\n", outputFilename)
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(2)
+// Template represents a template to fill out
+type Template struct {
+	Name   string
+	Reader io.Reader
+}
+
+// Template returns the derived template.Template.
+func (bt Template) Template() (*template.Template, error) {
+	b, err := ioutil.ReadAll(bt.Reader)
+	if err != nil {
+		return nil, err
+	}
+	return template.New(bt.Name).Parse(string(b))
+}
+
+// Process will process each passed in template writing it's output to the given io.Writer.
+func Process(w io.Writer, templates []Template, values map[string]string) error {
+	for _, t := range templates {
+		if err := outputTemplate(w, t, values); err != nil {
+			return &ProcessingErr{
+				Name: t.Name,
+				Err:  err,
+			}
 		}
-		defer f.Close()
-		out = f
 	}
+	return nil
+}
 
-	if err := t.Execute(out, vals); err != nil {
-		fmt.Fprintf(os.Stderr, "Error running template %v.\n", outputFilename)
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(3)
+// ProcessFiles acts the same as Process but will first read in files from the provided filenames
+func ProcessFiles(w io.Writer, filenames []string, values map[string]string) error {
+	if len(filenames) == 0 {
+		return errors.New("no files provided")
 	}
+	var tpls = make([]Template, len(filenames))
 
+	for i, fname := range filenames {
+		fh, err := os.Open(fname)
+		if err != nil {
+			return fmt.Errorf("error opening file %s for reading: %v", fname, err)
+		}
+		defer fh.Close()
+		tpls[i].Name = "file:" + fname
+		tpls[i].Reader = fh
+	}
+	return Process(w, tpls, values)
 }
